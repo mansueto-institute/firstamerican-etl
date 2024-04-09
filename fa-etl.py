@@ -2,6 +2,7 @@ import argparse, os, zipfile
 from pathlib import Path
 import logging
 import psutil
+import pyarrow as pa
 
 import polars as pl
 
@@ -158,7 +159,6 @@ def convert_prop(filename, input_dir):
     os.remove(unzipped_filepath)
     logging.info("Complete. Moving to next file...")
 
-
 def convert_taxhist(filename, input_dir):
     '''
     Convert zipped txt tax history file into parquet format.
@@ -205,7 +205,6 @@ def convert_taxhist(filename, input_dir):
     os.remove(unzipped_filepath)
     logging.info("Complete. Moving to next file...")
 
-
 def convert_valhist(filename, input_dir):
     '''
     Convert zipped txt value history file into parquet format.
@@ -224,8 +223,8 @@ def convert_valhist(filename, input_dir):
     output_filepath_ranked = output_dir + "/ranked_" + filename.replace(".txt.zip", ".parquet")
 
     # check if parquet already exists, if it does, skip
-    if os.path.exists(output_filepath):
-        logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
+    if os.path.exists(output_filepath) & os.path.exists(output_filepath_ranked):
+        logging.info(f"{output_filepath} and {output_filepath_ranked} already exists. Skipping this file in the directory...")
         return
 
     # decompress file
@@ -249,58 +248,83 @@ def convert_valhist(filename, input_dir):
             (pl.col('ApprYear').cast(pl.Int64)),
             (pl.col('TaxableYear').cast(pl.Int64)),
         ])
-        # choose year/value (assd, market, then appr if not null)
-        .with_columns([
-            pl.when(((pl.col("AssdYear").is_not_null()) | (pl.col("AssdYear") == 0))
-                    & (pl.col("AssdYear") > pl.col("MarketValueYear")))
-                .then(pl.col("AssdYear"))
-                .when((pl.col("MarketValueYear").is_not_null()) | (pl.col("MarketValueYear") == 0))
-                .then(pl.col("MarketValueYear"))
-                .when((pl.col("ApprYear").is_not_null()) | (pl.col("ApprYear") == 0))
-                .then(pl.col("ApprYear"))
-                .otherwise(None)
-                .alias("Year").cast(pl.Int64),
-            pl.when(((pl.col("AssdYear").is_not_null()) | (pl.col("AssdYear") == 0))
-                    & (pl.col("AssdYear") > pl.col("MarketValueYear")))
-                .then(pl.col("AssdTotalValue"))
-                .when((pl.col("MarketValueYear").is_not_null()) | (pl.col("MarketValueYear") == 0))
-                .then(pl.col("MarketTotalValue"))
-                .when((pl.col("ApprYear").is_not_null()) | (pl.col("ApprYear") == 0))
-                .then(pl.col("ApprTotalValue"))
-                .otherwise(None)
-                .alias("Value").cast(pl.Int64),
-            pl.when(((pl.col("AssdYear").is_not_null()) | (pl.col("AssdYear") == 0))
-                    & (pl.col("AssdYear") > pl.col("MarketValueYear")))
-                .then(pl.lit('Assd'))
-                .when((pl.col("MarketValueYear").is_not_null()) | (pl.col("MarketValueYear") == 0))
-                .then(pl.lit('Market'))
-                .when((pl.col("ApprYear").is_not_null()) | (pl.col("ApprYear") == 0))
-                .then(pl.lit('Appr'))
-                .otherwise(None)
-                .alias("AssessmentUsed")
-        ])
         ).sink_parquet(Path(output_filepath), compression="snappy")
     logging.info(f"{output_filepath} complete.")
 
-    # ranked valhist file
     try:
         logging.info(f"Creating {output_filepath_ranked}...")
-        valhist_ranked = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
-            # rank to the most recent valuation history by propertyid
-            .with_columns([
-                (pl.col("Year").rank(method="random", descending = True, seed = 1)
-                    .over(['Year', "PropertyID"])
-                    .alias("RecentValueByYear")),
+
+        #split val hist into three separate datasets with propID
+        assd = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+            .select(['PropertyID', 'AssdTotalValue', 'AssdYear'])
+            .filter(
+                ((pl.col('AssdTotalValue').is_not_null()) & (pl.col('AssdYear').is_not_null()))))
+
+        market = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+            .select(['PropertyID', 'MarketTotalValue', 'MarketValueYear'])
+            .filter(
+                ((pl.col('MarketTotalValue').is_not_null()) & (pl.col('MarketValueYear').is_not_null()))))
+
+        appr = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+            .select(['PropertyID', 'ApprTotalValue', 'ApprYear'])
+            .filter(
+                ((pl.col('ApprTotalValue').is_not_null() & (pl.col('ApprYear').is_not_null())))))
+
+        valhist_ranked = (assd.join(
+            other=market,
+            how="outer",
+            left_on=['PropertyID', 'AssdYear'],
+            right_on=['PropertyID', 'MarketValueYear'],
+            suffix='_market'
+        ).join(
+            other=appr,
+            how="outer",
+            left_on=['PropertyID', 'AssdYear'],
+            right_on=['PropertyID', 'ApprYear'],
+            suffix='_appr'
+        ).with_columns([
+            #year
+            pl.col('AssdYear').cast(pl.Int64).alias('Year'),
+            #value conditional
+            pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
+                .then(pl.col("AssdTotalValue"))
+                .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
+                .then(pl.col("MarketTotalValue"))
+                .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
+                .then(pl.col("ApprTotalValue"))
+                .otherwise(None)
+                .alias("Value").cast(pl.Int64),
+            #flag for which value is used
+            pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
+                .then(pl.lit('Assd'))
+                .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
+                .then(pl.lit('Market'))
+                .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
+                .then(pl.lit('Appr'))
+                .otherwise(None)
+                .alias("AssessmentUsed")
+        ]
+        ).with_columns([
+            (pl.col("Year").rank(method="random", descending = True, seed = 1)
+                .over(['Year', "PropertyID"])
+                .alias("RecentValueByYear")),
             # limit to only the most recent value of each property
             ]).filter(
                 pl.col("RecentValueByYear") == 1
             )
-            ).collect(streaming=True)
+        .select(
+            ['PropertyID','Year', 'Value', 'AssessmentUsed']
+        )
+        ).collect(streaming=True)
+
+        #write to parquet
         valhist_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
         valhist_ranked.clear()
         logging.info(f"{output_filepath_ranked} complete.")
+
     except Exception as e:
-        os.remove(output_filepath_ranked)
+        if os.path.exists(output_filepath_ranked):
+            os.remove(output_filepath_ranked)
         logging.info(f"Error: {str(e)}")
 
     #delete unzipped file for memory conservation
@@ -450,10 +474,10 @@ def main(input_dir: str, log_file: str):
     logging.info(f'Join into unified file...')
     logging.info(f'Memory usage {mem_profile()}')
     join(input_dir=input_dir, 
-         valhist_filename=sorted_filenames['ranked_ValHist'][0], 
-         prop_filename=sorted_filenames['Prop'][0], 
-         ranked_deed_filename=sorted_filenames['ranked_Deed'][0], 
-         taxhist_filename=sorted_filenames['TaxHist'][0])
+        valhist_filename=sorted_filenames['ranked_ValHist'][0], 
+        prop_filename=sorted_filenames['Prop'][0], 
+        ranked_deed_filename=sorted_filenames['ranked_Deed'][0], 
+        taxhist_filename=sorted_filenames['TaxHist'][0])
     logging.info(f'Join complete.')
 
     #clean up
