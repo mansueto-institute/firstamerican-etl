@@ -1,12 +1,12 @@
-import argparse, os, zipfile, sys
+import argparse, os, zipfile, sys, logging
 from pathlib import Path
-import logging
 import psutil
 import polars as pl
+import pyarrow
 
 def mem_profile() -> str:
     """
-    Return memory usage, str  [Function written by Nico]
+    Return memory usage, str  [Function written by Nico Marchio]
     """
     mem_use = str(round(100 - psutil.virtual_memory().percent,4))+'% of '+str(round(psutil.virtual_memory().total/1e+9,3))+' GB RAM'
     return mem_use
@@ -17,9 +17,16 @@ def convert_sales(filename, input_dir):
 
     Inputs:
     - filename: str ("Deed36061.txt.zip")
-    - input_dir: str, path to directory where the file exists (and where all other files will be saved to)
+    - input_dir: str, path to directory where the file exists (and where all other files will be saved to).
+        The filename above should be included within a subdirectory called "raw/".
     
-    Returns: Nothing. Saves parquet file to a parquet subdirectory within the input_dir.
+    Returns: Nothing. Saves two parquet files to a 'staging/' subdirectory within the input_dir.
+    - all sales parquet file ("Deed36061.parquet")
+    - ranked sales parquet file ("ranked_Deed36061.parquet"): this parquet file
+        only has the most recent sale for each year/propertyID combination. This 
+        file is the one used for the join to create the "merged.parquet" file.
+    
+    Both files contain the propertyID, year, and sale amount.
     '''
     # filepaths
     unzipped_dir = input_dir+ "/" +'unzipped'
@@ -69,18 +76,19 @@ def convert_sales(filename, input_dir):
                 ])                     
             ).sink_parquet(Path(output_filepath), compression="snappy")
         logging.info(f"{output_filepath} complete.")
+    
     except Exception as e:
-        os.remove(output_filepath)
+        if os.path.exists(output_filepath):
+            os.remove(output_filepath)
         logging.info(f"Error: {str(e)}")
         sys.exit()
 
-    # ranked sales file
+    # ranked sales file (only gets the most recent sale from each year/ID combination)
     try:
         logging.info(f"Creating {output_filepath_ranked}...")
         sale_ranked = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
             .filter(pl.col('SaleFlag') == 1)
             .with_columns([
-                #(pl.coalesce(pl.col(["SaleYear", "RecordingYear"])).cast(pl.Int16).alias("SaleRecordingYear")),
                 (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(['RecordingYear', "PropertyID"]).alias("RecentSaleByYear")),
                 (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(["PropertyID"]).alias("MostRecentSale")),
                 (pl.col('PropertyID').cast(pl.Int64)),
@@ -94,8 +102,10 @@ def convert_sales(filename, input_dir):
         sale_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
         sale_ranked.clear()
         logging.info(f"{output_filepath_ranked} complete.")
+    
     except Exception as e:
-        os.remove(output_filepath_ranked)
+        if os.path.exists(output_filepath_ranked):
+            os.remove(output_filepath_ranked)
         logging.info(f"Error: {str(e)}")
         sys.exit()
 
@@ -110,9 +120,13 @@ def convert_prop(filename, input_dir):
 
     Inputs:
     - filename: str ("Prop36061.txt.zip")
-    - input_dir: str, path to directory where the file exists (and where all other files will be saved to)
+    - input_dir: str, path to directory where the file exists (and where all other files will be saved to).
+        The filename above should be included within a subdirectory called "raw/".
     
     Returns: Nothing. Saves parquet file to a parquet subdirectory within the input_dir.
+    - all properties parquet file ("Prop36061.parquet"): this file contains
+        time invariant characteristics of each property, including geographic
+        characteristics and property classification.
     '''
     # filepaths
     unzipped_dir = input_dir+ "/" +'unzipped'
@@ -156,7 +170,8 @@ def convert_prop(filename, input_dir):
         logging.info(f"{output_filepath} complete.")
 
     except Exception as e:
-        os.remove(output_filepath)
+        if os.path.exists(output_filepath):
+            os.remove(output_filepath)
         logging.info(f"Error: {str(e)}")
         sys.exit()
 
@@ -171,11 +186,13 @@ def convert_taxhist(filename, input_dir):
 
     Inputs:
     - filename: str ("TaxHist36061.txt.zip")
-    - input_dir: str, path to directory where the file exists (and where all other files will be saved to)
+    - input_dir: str, path to directory where the file exists (and where all other files will be saved to).
+        The filename above should be included within a subdirectory called "raw/".
     
     Returns: Nothing. Saves parquet file to a parquet subdirectory within the input_dir.
+    - all tax hist parquet file ("TaxHist36061.parquet"): this contains the 
+        propertyID, tax year, and tax amount.
     '''
-
     # filepaths
     unzipped_dir = input_dir+ "/" +'unzipped'
     input_filepath = input_dir + "/raw/" + filename
@@ -208,7 +225,8 @@ def convert_taxhist(filename, input_dir):
         logging.info(f"{output_filepath} complete.")
     
     except Exception as e:
-        os.remove(output_filepath)
+        if os.path.exists(output_filepath):
+            os.remove(output_filepath)
         logging.info(f"Error: {str(e)}")
         sys.exit()
 
@@ -223,9 +241,20 @@ def convert_valhist(filename, input_dir):
 
     Inputs:
     - filename: str ("ValHist36061.txt.zip")
-    - input_dir: str, path to directory where the file exists (and where all other files will be saved to)
+    - input_dir: str, path to directory where the file exists (and where all other files will be saved to).
+        The filename above should be included within a subdirectory called "raw/".
     
-    Returns: Nothing. Saves parquet file to a parquet subdirectory within the input_dir.
+    Returns: Nothing. Saves two parquet files to a parquet subdirectory within the input_dir.
+    - all value history parquet file ("Deed36061.parquet") a cleaned / parquet version
+        of the input txt file
+    - ranked value history parquet file ("ranked_Deed36061.parquet"): this parquet file
+        standardizes year across the assessed/market/appraised values, so that each observation
+        is a propertyID/year combination with relevant values for each of these values (null
+        if the value doesn't exist). There is a standardized "Value" column which takes the best 
+        option of the 3 values when many are present (cascade logic: Assessed, Market, then Appraised)
+        and retains the value used in a column called "AssessmentUsed" which contains str values ("Assd",
+        "Market", "Appr"). This file also collapses the data a bit more by de-duplicating 
+        multiple combinations of Year/PropertyID combinations.
     '''
     # filepaths
     unzipped_dir = input_dir+ "/" +'unzipped'
@@ -245,23 +274,29 @@ def convert_valhist(filename, input_dir):
         zip_ref.extractall(unzipped_dir)
     unzipped_filepath = unzipped_dir + "/" + filename.replace(".txt.zip", ".txt")
     
-    # convert valhist file to parquet
-    logging.info(f"Converting {input_filepath} to parquet...")
-    # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L127-L155
-    (pl.scan_csv(unzipped_filepath, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
-        .select(['PropertyID', 'AssdTotalValue', 'AssdYear', 'MarketTotalValue', 'MarketValueYear', 'ApprTotalValue', 'ApprYear', 'TaxableYear'])
-        .with_columns([
-            (pl.col('PropertyID').cast(pl.Int64)),
-            (pl.col('AssdTotalValue').cast(pl.Int64)),
-            (pl.col('AssdYear').cast(pl.Int64)),
-            (pl.col('MarketTotalValue').cast(pl.Int64)),
-            (pl.col('MarketValueYear').cast(pl.Int64)),
-            (pl.col('ApprTotalValue').cast(pl.Int64)),
-            (pl.col('ApprYear').cast(pl.Int64)),
-            (pl.col('TaxableYear').cast(pl.Int64)),
-        ])
-        ).sink_parquet(Path(output_filepath), compression="snappy")
-    logging.info(f"{output_filepath} complete.")
+    try:
+        # convert valhist file to parquet
+        logging.info(f"Converting {input_filepath} to parquet...")
+        # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L127-L155
+        (pl.scan_csv(unzipped_filepath, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
+            .select(['PropertyID', 'AssdTotalValue', 'AssdYear', 'MarketTotalValue', 'MarketValueYear', 'ApprTotalValue', 'ApprYear', 'TaxableYear'])
+            .with_columns([
+                (pl.col('PropertyID').cast(pl.Int64)),
+                (pl.col('AssdTotalValue').cast(pl.Int64)),
+                (pl.col('AssdYear').cast(pl.Int64)),
+                (pl.col('MarketTotalValue').cast(pl.Int64)),
+                (pl.col('MarketValueYear').cast(pl.Int64)),
+                (pl.col('ApprTotalValue').cast(pl.Int64)),
+                (pl.col('ApprYear').cast(pl.Int64)),
+                (pl.col('TaxableYear').cast(pl.Int64)),
+            ])
+            ).sink_parquet(Path(output_filepath), compression="snappy")
+        logging.info(f"{output_filepath} complete.")
+    
+    except Exception as e:
+        if os.path.exists(output_filepath):
+            os.remove(output_filepath)
+        logging.info(f"Error: {str(e)}")
 
     try:
         logging.info(f"Creating {output_filepath_ranked}...")
@@ -355,10 +390,13 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
     - tax history (tax amount by year)
 
     Inputs:
-    - filename: str ("TaxHist36061.txt.zip")
-    - input_dir: str, path to directory where the file exists (and where all other files will be saved to)
+    - ranked_valhist_filename, prop_filename, ranked_deed_filename, taxhist_filename: 
+        all strings ("TaxHist36061.parquet")
+    - input_dir: str, path to directory where the file exists (and where all other files will be saved to).
+        The filename above should be included within a subdirectory called "raw/".
     
     Returns: Nothing. Saves parquet file to a parquet subdirectory within the input_dir.
+    - merged parquet files (found withing the "unified/" subdirectory).
     '''
     #read in parquet as lazy Dataframes
     logging.info(f"Reading in parquet files to merge...")
@@ -407,7 +445,8 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
             (pl.col("TaxAmt")/100).alias("TaxAmtAdjusted"),
         #filter for only observations with sales values
         ]).filter(
-            pl.col('SaleAmt').is_not_null()
+            ((pl.col('AssessmentUsed') == "Assd")
+            & (pl.col('SaleAmt').is_not_null()))
         )).sink_parquet(output_filepath, compression="snappy")
     logging.info(f"Merged parquet file completed")
 
