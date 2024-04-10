@@ -18,7 +18,7 @@ module load python/anaconda-2022.05
 # conda create --name fa_etl_env python=3.11.5 --yes
 # source activate fa_etl_env
 # conda install -c conda-forge polars --yes
-# conda install -c conda-forge psutil --yes
+# conda install psutil
 
 source activate fa_etl_env
 

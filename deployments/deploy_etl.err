@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/project/crberry/firstamerican-etl/fa-etl.py", line 4, in <module>
-    import psutil
-ModuleNotFoundError: No module named 'psutil'
