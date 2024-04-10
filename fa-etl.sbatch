@@ -25,7 +25,7 @@ source activate fa_etl_env
 
 working_directory=/project/crberry/firstamerican-etl/dev/36061
 
-log_file_arg=$working_directory/deployments/deploy_etl.log
+log_file_arg=/project/crberry/firstamerican-etl/deployments/deploy_etl.log
 input_dir_arg=$working_directory/
 
 python fa-etl.py --input_dir $input_dir_arg --log_file $log_file_arg

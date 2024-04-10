@@ -501,7 +501,7 @@ def main(input_dir: str, log_file: str):
         sorted_filenames[file_type] = [filename for filename in filenames if file_type in filename]
     logging.info(f'Files to process: {sorted_filenames}')
 
-    # check to make sure there is one of each of 4 files to continue? better test here?
+    # check to make sure there is one of each of 4 files to continue
     for type, list in sorted_filenames.items():
         if len(list) < 1:
             logging.info(f'Raw subdir does not have a {type} file. Stopping ETL.')
