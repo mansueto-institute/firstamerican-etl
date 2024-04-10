@@ -1,8 +1,7 @@
-import argparse, os, zipfile
+import argparse, os, zipfile, sys
 from pathlib import Path
 import logging
 import psutil
-import pyarrow as pa
 
 import polars as pl
 
@@ -74,6 +73,7 @@ def convert_sales(filename, input_dir):
     except Exception as e:
         os.remove(output_filepath)
         logging.info(f"Error: {str(e)}")
+        sys.exit()
 
     # ranked sales file
     try:
@@ -98,6 +98,7 @@ def convert_sales(filename, input_dir):
     except Exception as e:
         os.remove(output_filepath_ranked)
         logging.info(f"Error: {str(e)}")
+        sys.exit()
 
     #delete unzipped file for memory conservation
     logging.info("Deleting unzipped txt file...")
@@ -125,34 +126,40 @@ def convert_prop(filename, input_dir):
         logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
         return
     
-    # decompress file
-    logging.info("Unzipping file...")
-    with zipfile.ZipFile(input_filepath, 'r') as zip_ref:
-        zip_ref.extractall(unzipped_dir)
-    unzipped_filepath = unzipped_dir + "/" + filename.replace(".txt.zip", ".txt")
+    try:
+        # decompress file
+        logging.info("Unzipping file...")
+        with zipfile.ZipFile(input_filepath, 'r') as zip_ref:
+            zip_ref.extractall(unzipped_dir)
+        unzipped_filepath = unzipped_dir + "/" + filename.replace(".txt.zip", ".txt")
 
-    # convert annual file to parquet
-    logging.info(f"Converting {input_filepath} to parquet...")
-    # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L127-L155
-    (pl.scan_csv(unzipped_filepath, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
-        .select(['PropertyID', 'PropertyClassID', "FATimeStamp", 'SitusLatitude', 'SitusLongitude', 'SitusFullStreetAddress', 'SitusCity', 'SitusState', 'SitusZIP5', 'FIPS', 'SitusCensusTract', 'SitusCensusBlock', 'SitusGeoStatusCode'])
-            .filter(pl.col('PropertyClassID') == 'R')
-            .filter(pl.col('PropertyID').is_not_null())
-            .with_columns([
-                (pl.col('PropertyID').cast(pl.Int64)),
-                (pl.col("FATimeStamp").cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
-                (pl.when((pl.col('SitusLatitude') == 0)).then(None).otherwise(pl.col('SitusLatitude')).alias('SitusLatitude')),
-                (pl.when((pl.col('SitusLongitude') == 0)).then(None).otherwise(pl.col('SitusLongitude')).alias('SitusLongitude')),
-                (pl.col('FIPS').cast(pl.Utf8).str.pad_start(5, "0")),
-                (pl.col('SitusCensusTract').cast(pl.Utf8).str.pad_start(6, "0")),
-                (pl.col('SitusCensusBlock').cast(pl.Utf8).str.pad_start(4, "0")),
-                (pl.col('SitusZIP5').cast(pl.Utf8).str.pad_start(5, "0")),
-                (pl.when(pl.col('SitusGeoStatusCode').cast(pl.Utf8).is_in(['5', '7', '9', 'A', 'B', 'X', 'R'])).then(pl.col('SitusGeoStatusCode')).otherwise(None).name.keep()),
-                #(pl.when(pl.col('PropertyClassID').cast(pl.Utf8).is_in(['R', 'C', 'O', 'F', 'I', 'T', 'A', 'V', 'E'])).then(pl.col('PropertyClassID')).otherwise(None).name.keep()),
-                (pl.concat_str([pl.col("FIPS"), pl.col('SitusCensusTract')], separator= "_").fill_null(pl.col('FIPS')).alias("FIPS_SitusCensusTract"))
-                ])
-        ).sink_parquet(Path(output_filepath), compression="snappy")
-    logging.info(f"{output_filepath} complete.")
+        # convert annual file to parquet
+        logging.info(f"Converting {input_filepath} to parquet...")
+        # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L127-L155
+        (pl.scan_csv(unzipped_filepath, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
+            .select(['PropertyID', 'PropertyClassID', "FATimeStamp", 'SitusLatitude', 'SitusLongitude', 'SitusFullStreetAddress', 'SitusCity', 'SitusState', 'SitusZIP5', 'FIPS', 'SitusCensusTract', 'SitusCensusBlock', 'SitusGeoStatusCode'])
+                .filter(pl.col('PropertyClassID') == 'R')
+                .filter(pl.col('PropertyID').is_not_null())
+                .with_columns([
+                    (pl.col('PropertyID').cast(pl.Int64)),
+                    (pl.col("FATimeStamp").cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
+                    (pl.when((pl.col('SitusLatitude') == 0)).then(None).otherwise(pl.col('SitusLatitude')).alias('SitusLatitude')),
+                    (pl.when((pl.col('SitusLongitude') == 0)).then(None).otherwise(pl.col('SitusLongitude')).alias('SitusLongitude')),
+                    (pl.col('FIPS').cast(pl.Utf8).str.pad_start(5, "0")),
+                    (pl.col('SitusCensusTract').cast(pl.Utf8).str.pad_start(6, "0")),
+                    (pl.col('SitusCensusBlock').cast(pl.Utf8).str.pad_start(4, "0")),
+                    (pl.col('SitusZIP5').cast(pl.Utf8).str.pad_start(5, "0")),
+                    (pl.when(pl.col('SitusGeoStatusCode').cast(pl.Utf8).is_in(['5', '7', '9', 'A', 'B', 'X', 'R'])).then(pl.col('SitusGeoStatusCode')).otherwise(None).name.keep()),
+                    #(pl.when(pl.col('PropertyClassID').cast(pl.Utf8).is_in(['R', 'C', 'O', 'F', 'I', 'T', 'A', 'V', 'E'])).then(pl.col('PropertyClassID')).otherwise(None).name.keep()),
+                    (pl.concat_str([pl.col("FIPS"), pl.col('SitusCensusTract')], separator= "_").fill_null(pl.col('FIPS')).alias("FIPS_SitusCensusTract"))
+                    ])
+            ).sink_parquet(Path(output_filepath), compression="snappy")
+        logging.info(f"{output_filepath} complete.")
+
+    except Exception as e:
+        os.remove(output_filepath)
+        logging.info(f"Error: {str(e)}")
+        sys.exit()
 
     #delete unzipped file for memory conservation
     logging.info("Deleting unzipped txt file...")
@@ -181,24 +188,30 @@ def convert_taxhist(filename, input_dir):
         logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
         return
 
-    # decompress file
-    logging.info("Unzipping file...")
-    with zipfile.ZipFile(input_filepath, 'r') as zip_ref:
-        zip_ref.extractall(unzipped_dir)
-    unzipped_filepath = unzipped_dir + "/" + filename.replace(".txt.zip", ".txt")
+    try:
+        # decompress file
+        logging.info("Unzipping file...")
+        with zipfile.ZipFile(input_filepath, 'r') as zip_ref:
+            zip_ref.extractall(unzipped_dir)
+        unzipped_filepath = unzipped_dir + "/" + filename.replace(".txt.zip", ".txt")
+        
+        # convert taxhist file to parquet
+        logging.info(f"Converting {input_filepath} to parquet...")
+        # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L127-L155
+        (pl.scan_csv(unzipped_filepath, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
+            .select(['PropertyID', 'TaxYear', 'TaxAmt'])
+            .with_columns([
+                (pl.col('PropertyID').cast(pl.Int64)),
+                (pl.col('TaxYear').cast(pl.Int64)),
+                (pl.col('TaxAmt').cast(pl.Int64)),
+            ])
+            ).sink_parquet(Path(output_filepath), compression="snappy")
+        logging.info(f"{output_filepath} complete.")
     
-    # convert taxhist file to parquet
-    logging.info(f"Converting {input_filepath} to parquet...")
-    # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L127-L155
-    (pl.scan_csv(unzipped_filepath, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
-        .select(['PropertyID', 'TaxYear', 'TaxAmt'])
-        .with_columns([
-            (pl.col('PropertyID').cast(pl.Int64)),
-            (pl.col('TaxYear').cast(pl.Int64)),
-            (pl.col('TaxAmt').cast(pl.Int64)),
-        ])
-        ).sink_parquet(Path(output_filepath), compression="snappy")
-    logging.info(f"{output_filepath} complete.")
+    except Exception as e:
+        os.remove(output_filepath)
+        logging.info(f"Error: {str(e)}")
+        sys.exit()
 
     #delete unzipped file for memory conservation
     logging.info("Deleting unzipped txt file...")
@@ -333,7 +346,7 @@ def convert_valhist(filename, input_dir):
     logging.info("Complete. Moving to next file...")
 
 
-def join(input_dir, valhist_filename, prop_filename, ranked_deed_filename, taxhist_filename):
+def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename, taxhist_filename):
     '''
     Creates one merged parquet file with an observation as each unique and 
     most recent combination of property id/year present in the value history file, 
@@ -350,7 +363,7 @@ def join(input_dir, valhist_filename, prop_filename, ranked_deed_filename, taxhi
     '''
     #read in parquet as lazy Dataframes
     logging.info(f"Reading in parquet files to merge...")
-    valhist = pl.scan_parquet(Path(input_dir+"/staging/"+valhist_filename))
+    ranked_valhist = pl.scan_parquet(Path(input_dir+"/staging/"+ranked_valhist_filename))
     prop = pl.scan_parquet(Path(input_dir+"/staging/"+prop_filename))
     ranked_deed = pl.scan_parquet(Path(input_dir+"/staging/"+ranked_deed_filename))
     taxhist = pl.scan_parquet(Path(input_dir+"/staging/"+taxhist_filename))
@@ -358,9 +371,9 @@ def join(input_dir, valhist_filename, prop_filename, ranked_deed_filename, taxhi
     #set output path
     output_filepath = Path(input_dir+"/unified/merged.parquet")
 
-    logging.info(f"Joining val hist to prop, ranked_deed, and taxhist...")
+    logging.info(f"Joining ranked val hist to prop, ranked_deed, and taxhist...")
     # https://docs.pola.rs/py-polars/html/reference/lazyframe/api/polars.LazyFrame.join.html
-    valhist.join(
+    (ranked_valhist.join(
         # first join in the data from the annual file (prop characteristics)
         other= prop,
         how = "left",
@@ -393,8 +406,10 @@ def join(input_dir, valhist_filename, prop_filename, ranked_deed_filename, taxhi
         #assumption that tax amount is off by 100
         ).with_columns([
             (pl.col("TaxAmt")/100).alias("TaxAmtAdjusted"),
-        ]
-        ).sink_parquet(output_filepath, compression="snappy")
+        #filter for only observations with sales values
+        ]).filter(
+            pl.col('SaleAmt').is_not_null()
+        )).sink_parquet(output_filepath, compression="snappy")
     logging.info(f"Merged parquet file completed")
 
 def main(input_dir: str, log_file: str):
@@ -474,7 +489,7 @@ def main(input_dir: str, log_file: str):
     logging.info(f'Join into unified file...')
     logging.info(f'Memory usage {mem_profile()}')
     join(input_dir=input_dir, 
-        valhist_filename=sorted_filenames['ranked_ValHist'][0], 
+        ranked_valhist_filename=sorted_filenames['ranked_ValHist'][0], 
         prop_filename=sorted_filenames['Prop'][0], 
         ranked_deed_filename=sorted_filenames['ranked_Deed'][0], 
         taxhist_filename=sorted_filenames['TaxHist'][0])
@@ -487,8 +502,6 @@ def main(input_dir: str, log_file: str):
 
     logging.info(f'Memory usage {mem_profile()}')
     logging.info("Done.")
-
-
 
 def setup(args=None):
     '''
