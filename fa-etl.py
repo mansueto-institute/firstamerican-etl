@@ -429,7 +429,6 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
             how='left',
             left_on=['PropertyID', 'Year'], 
             right_on=['PropertyID','RecordingYear']
-
         #assumption that sale amount is off by 10x in 2012 (values are super weird)
         # ).with_columns([
         #     (pl.col("SaleAmt")/10).alias("SaleAmtAdjusted"),
@@ -443,7 +442,7 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
         #assumption that tax amount is off by 100
         ).with_columns([
             (pl.col("TaxAmt")/100).alias("TaxAmtAdjusted"),
-        #filter for only observations with sales values
+        #filter for only observations with assessment and sales values
         ]).filter(
             ((pl.col('AssessmentUsed') == "Assd")
             & (pl.col('SaleAmt').is_not_null()))
@@ -452,13 +451,29 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
 
 def main(input_dir: str, log_file: str):
     '''
-    @TODO: add doc string
+    Walks step by step through the process of the ETL pipeline by: 
+    - setting up the environment
+    - converting each of the .txt.zip files into parquet files
+    - joins all the parquet files and filters to only the observations 
+        which contain assessed values and sales values
+    - validates/standardizes the geographic elements using spatil join.
+
+    Inputs:
+    - input dir (str): Path to input directory, containing a raw/ 
+        subdirectory with Deed, Prop, TaxHist, and ValHist .txt.zip files.
+    - log_file (str): Path to a log file where all "logging.info()" 
+        strings will be saved.
+
+    Returns: Nothing. Saves new files to the following directories:
+    - staging: contains intermediate parquet files for all input .txt.zip files
+    - unified: contains final parquet files with all merged content
+    - unzipped: (temp dir that gets deleted at the end of the script) 
+        contains unzipped txt files before reading into parquet
     '''
     # set up file environment
     staging_dir = input_dir + "/" + "staging"
     unzipped_dir = input_dir + "/" + "unzipped"
     unified_dir = input_dir + "/" + "unified"
-    deployments_dir = input_dir + "/" + "deployments"
     raw_dir = input_dir + "/" + "raw"
     if not os.path.exists(staging_dir):
         os.makedirs(staging_dir)
@@ -466,8 +481,6 @@ def main(input_dir: str, log_file: str):
         os.makedirs(unzipped_dir)
     if not os.path.exists(unified_dir):
         os.makedirs(unified_dir)
-    if not os.path.exists(deployments_dir):
-        os.makedirs(deployments_dir)
     Path(log_file).touch()
     
     # set up logging
@@ -543,10 +556,10 @@ def main(input_dir: str, log_file: str):
 
 def setup(args=None):
     '''
-    @TODO: add doc string
+    Parses command line arguments for script.
     '''
-    parser = argparse.ArgumentParser(description='Convert zipped txt input files to parquet files.')
-    parser.add_argument('--input_dir', required=True, type=str, dest="input_dir", help="Path to input directory.")
+    parser = argparse.ArgumentParser(description='Conducts ETL pipeline to create one combined parquet file.')
+    parser.add_argument('--input_dir', required=True, type=str, dest="input_dir", help="Path to input directory, containing a raw/ subdirectory with Deed, Prop, TaxHist, and ValHist .txt.zip files.")
     parser.add_argument('--log_file', required=True, type=str, dest="log_file", help="Path to log file.")
     return parser.parse_args(args)
 
