@@ -13,7 +13,14 @@
 #SBATCH --account=pi-crberry
 
 module load python/anaconda-2022.05
-conda activate fa_etl_env
+
+# CREATE CONDA ENVIRONMENT IF NOT ALREADY CREATED
+# conda create --name fa_etl_env python=3.11.5 --yes
+# source activate fa_etl_env
+# conda install -c conda-forge polars --yes
+# conda install -c conda-forge psutil --yes
+
+source activate fa_etl_env
 
 working_directory=/Users/claireboyd/internships/mansueto/firstamerican-etl/dev/36061
 
@@ -21,7 +28,3 @@ log_file_arg=$working_directory/deployments/deploy_etl.log
 input_dir_arg=$working_directory/
 
 python fa-etl.py --input_dir $input_dir_arg --log_file $log_file_arg
-
-
-
-
