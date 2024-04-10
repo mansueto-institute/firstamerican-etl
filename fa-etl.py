@@ -360,7 +360,7 @@ def convert_valhist(filename, input_dir):
                 pl.col("RecentValueByYear") == 1
             )
         .select(
-            ['PropertyID','Year', 'Value', 'AssessmentUsed']
+            ['PropertyID','Year', 'Value', 'AssessmentUsed', 'MarketTotalValue', 'ApprTotalValue']
         )
         ).collect(streaming=True)
 
