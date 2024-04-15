@@ -35,13 +35,14 @@ def convert_sales(filename, input_dir):
     output_filepath = output_dir + "/" + filename.replace(".txt.zip", ".parquet")
     output_filepath_ranked = output_dir + "/ranked_" + filename.replace(".txt.zip", ".parquet")
 
-    # skip conversion if the file already exists
-    if os.path.exists(output_filepath):
-        logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
-        return
-    if os.path.exists(output_filepath_ranked):
-        logging.info(f"{output_filepath_ranked} already exists. Skipping this file in the directory...")
-        return
+    # # skip conversion if the file already exists
+    # if os.path.exists(output_filepath):
+    #     logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
+    #     sys.exit()
+        
+    # if os.path.exists(output_filepath_ranked):
+    #     logging.info(f"{output_filepath_ranked} already exists. Skipping this file in the directory...")
+    #     sys.exit()
     
     # decompress file
     logging.info("Unzipping file...")
@@ -84,30 +85,30 @@ def convert_sales(filename, input_dir):
         sys.exit()
 
     # ranked sales file (only gets the most recent sale from each year/ID combination)
-    try:
-        logging.info(f"Creating {output_filepath_ranked}...")
-        sale_ranked = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
-            .filter(pl.col('SaleFlag') == 1)
-            .with_columns([
-                (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(['RecordingYear', "PropertyID"]).alias("RecentSaleByYear")),
-                (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(["PropertyID"]).alias("MostRecentSale")),
-                (pl.col('PropertyID').cast(pl.Int64)),
-                (pl.col('RecordingYear').cast(pl.Int64)),
-                (pl.col('SaleAmt').cast(pl.Int64)),
-            ])
-            .filter(pl.col('RecentSaleByYear') == 1)
-            ).select(['PropertyID', 'SaleAmt', 'RecordingYear']
-            ).collect(streaming=True)
+    #try:
+    logging.info(f"Creating {output_filepath_ranked}...")
+    sale_ranked = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+        .filter(pl.col('SaleFlag') == 1)
+        .with_columns([
+            (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(['RecordingYear', "PropertyID"]).alias("RecentSaleByYear")),
+            (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(["PropertyID"]).alias("MostRecentSale")),
+            (pl.col('PropertyID').cast(pl.Int64)),
+            (pl.col('RecordingYear').cast(pl.Int64)),
+            (pl.col('SaleAmt').cast(pl.Int64)),
+        ])
+        .filter(pl.col('RecentSaleByYear') == 1)
+        ).select(['PropertyID', 'SaleAmt', 'RecordingYear']
+        ).collect(streaming=True)
 
-        sale_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
-        sale_ranked.clear()
-        logging.info(f"{output_filepath_ranked} complete.")
+    sale_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
+    sale_ranked.clear()
+    logging.info(f"{output_filepath_ranked} complete.")
     
-    except Exception as e:
-        if os.path.exists(output_filepath_ranked):
-            os.remove(output_filepath_ranked)
-        logging.info(f"Error: {str(e)}")
-        sys.exit()
+    # except Exception as e:
+    #     if os.path.exists(output_filepath_ranked):
+    #         os.remove(output_filepath_ranked)
+    #     logging.info(f"Error: {str(e)}")
+    #     sys.exit()
 
     #delete unzipped file for memory conservation
     logging.info("Deleting unzipped txt file...")
@@ -134,10 +135,10 @@ def convert_prop(filename, input_dir):
     output_dir = input_dir + "/" + "staging"
     output_filepath = output_dir + "/" + filename.replace(".txt.zip", ".parquet")
 
-    # check if parquet already exists, if it does, skip
-    if os.path.exists(output_filepath):
-        logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
-        return
+    # # check if parquet already exists, if it does, skip
+    # if os.path.exists(output_filepath):
+    #     logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
+    #     sys.exit()
     
     try:
         # decompress file
@@ -199,10 +200,10 @@ def convert_taxhist(filename, input_dir):
     output_dir = input_dir + "/" + "staging"
     output_filepath = output_dir + "/" + filename.replace(".txt.zip", ".parquet")
 
-    # check if parquet already exists, if it does, skip
-    if os.path.exists(output_filepath):
-        logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
-        return
+    # # check if parquet already exists, if it does, skip
+    # if os.path.exists(output_filepath):
+    #     logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
+    #     sys.exit()
 
     try:
         # decompress file
@@ -263,10 +264,10 @@ def convert_valhist(filename, input_dir):
     output_filepath = output_dir + "/" + filename.replace(".txt.zip", ".parquet")
     output_filepath_ranked = output_dir + "/ranked_" + filename.replace(".txt.zip", ".parquet")
 
-    # check if parquet already exists, if it does, skip
-    if os.path.exists(output_filepath) & os.path.exists(output_filepath_ranked):
-        logging.info(f"{output_filepath} and {output_filepath_ranked} already exists. Skipping this file in the directory...")
-        return
+    # # check if parquet already exists, if it does, skip
+    # if os.path.exists(output_filepath) & os.path.exists(output_filepath_ranked):
+    #     logging.info(f"{output_filepath} and {output_filepath_ranked} already exists. Skipping this file in the directory...")
+    #     sys.exit()
 
     # decompress file
     logging.info("Unzipping file...")
@@ -274,105 +275,97 @@ def convert_valhist(filename, input_dir):
         zip_ref.extractall(unzipped_dir)
     unzipped_filepath = unzipped_dir + "/" + filename.replace(".txt.zip", ".txt")
     
-    try:
-        # convert valhist file to parquet
-        logging.info(f"Converting {input_filepath} to parquet...")
-        # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L127-L155
-        (pl.scan_csv(unzipped_filepath, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
-            .select(['PropertyID', 'AssdTotalValue', 'AssdYear', 'MarketTotalValue', 'MarketValueYear', 'ApprTotalValue', 'ApprYear', 'TaxableYear'])
-            .with_columns([
-                (pl.col('PropertyID').cast(pl.Int64)),
-                (pl.col('AssdTotalValue').cast(pl.Int64)),
-                (pl.col('AssdYear').cast(pl.Int64)),
-                (pl.col('MarketTotalValue').cast(pl.Int64)),
-                (pl.col('MarketValueYear').cast(pl.Int64)),
-                (pl.col('ApprTotalValue').cast(pl.Int64)),
-                (pl.col('ApprYear').cast(pl.Int64)),
-                (pl.col('TaxableYear').cast(pl.Int64)),
-            ])
-            ).sink_parquet(Path(output_filepath), compression="snappy")
-        logging.info(f"{output_filepath} complete.")
-    
-    except Exception as e:
-        if os.path.exists(output_filepath):
-            os.remove(output_filepath)
-        logging.info(f"Error: {str(e)}")
+    # convert valhist file to parquet
+    logging.info(f"Converting {input_filepath} to parquet...")
+    # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L127-L155
+    (pl.scan_csv(unzipped_filepath, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
+        .select(['PropertyID', 'AssdTotalValue', 'AssdYear', 'MarketTotalValue', 'MarketValueYear', 'ApprTotalValue', 'ApprYear', 'TaxableYear'])
+        .with_columns([
+            (pl.col('PropertyID').cast(pl.Int64)),
+            (pl.col('AssdTotalValue').cast(pl.Int64)),
+            (pl.col('AssdYear').cast(pl.Int64)),
+            (pl.col('MarketTotalValue').cast(pl.Int64)),
+            (pl.col('MarketValueYear').cast(pl.Int64)),
+            (pl.col('ApprTotalValue').cast(pl.Int64)),
+            (pl.col('ApprYear').cast(pl.Int64)),
+            (pl.col('TaxableYear').cast(pl.Int64)),
+        ])
+        ).sink_parquet(Path(output_filepath), compression="snappy")
+    logging.info(f"{output_filepath} complete.")
 
-    try:
-        logging.info(f"Creating {output_filepath_ranked}...")
+    logging.info(f"Creating {output_filepath_ranked}...")
 
-        #split val hist into three separate datasets with propID
-        assd = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
-            .select(['PropertyID', 'AssdTotalValue', 'AssdYear'])
-            .filter(
-                ((pl.col('AssdTotalValue').is_not_null()) & (pl.col('AssdYear').is_not_null()))))
+    #split val hist into three separate datasets with PropertyID, Year as consistent
+    assd = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+        .with_columns([
+            pl.col('AssdYear').cast(pl.Int64).alias('Year')
+        ])
+        .filter(
+            ((pl.col('AssdTotalValue').is_not_null()) & (pl.col('AssdYear').is_not_null())))
+        .select(['PropertyID', 'AssdTotalValue', 'Year']))
 
-        market = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
-            .select(['PropertyID', 'MarketTotalValue', 'MarketValueYear'])
-            .filter(
-                ((pl.col('MarketTotalValue').is_not_null()) & (pl.col('MarketValueYear').is_not_null()))))
+    market = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+        .with_columns([
+            pl.col('MarketValueYear').cast(pl.Int64).alias('Year')
+        ])
+        .filter(
+            ((pl.col('MarketTotalValue').is_not_null()) & (pl.col('MarketValueYear').is_not_null())))
+        .select(['PropertyID', 'MarketTotalValue', 'Year']))
 
-        appr = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
-            .select(['PropertyID', 'ApprTotalValue', 'ApprYear'])
-            .filter(
-                ((pl.col('ApprTotalValue').is_not_null() & (pl.col('ApprYear').is_not_null())))))
+    appr = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+        .with_columns([
+            pl.col('ApprYear').cast(pl.Int64).alias('Year')
+        ])
+        .filter(
+            ((pl.col('ApprTotalValue').is_not_null() & (pl.col('ApprYear').is_not_null()))))
+        .select(['PropertyID', 'ApprTotalValue', 'Year']))
 
-        valhist_ranked = (assd.join(
-            other=market,
-            how="outer",
-            left_on=['PropertyID', 'AssdYear'],
-            right_on=['PropertyID', 'MarketValueYear'],
-            suffix='_market'
-        ).join(
-            other=appr,
-            how="outer",
-            left_on=['PropertyID', 'AssdYear'],
-            right_on=['PropertyID', 'ApprYear'],
-            suffix='_appr'
-        ).with_columns([
-            #year
-            pl.col('AssdYear').cast(pl.Int64).alias('Year'),
-            #value conditional
-            pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
-                .then(pl.col("AssdTotalValue"))
-                .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
-                .then(pl.col("MarketTotalValue"))
-                .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
-                .then(pl.col("ApprTotalValue"))
-                .otherwise(None)
-                .alias("Value").cast(pl.Int64),
-            #flag for which value is used
-            pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
-                .then(pl.lit('Assd'))
-                .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
-                .then(pl.lit('Market'))
-                .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
-                .then(pl.lit('Appr'))
-                .otherwise(None)
-                .alias("AssessmentUsed")
-        ]
-        ).with_columns([
-            (pl.col("Year").rank(method="random", descending = True, seed = 1)
-                .over(['Year', "PropertyID"])
-                .alias("RecentValueByYear")),
-            # limit to only the most recent value of each property
-            ]).filter(
-                pl.col("RecentValueByYear") == 1
-            )
-        .select(
-            ['PropertyID','Year', 'Value', 'AssessmentUsed', 'MarketTotalValue', 'ApprTotalValue']
+    valhist_ranked = (assd.join(
+        other=market,
+        how="left",
+        on=['PropertyID', 'Year'],
+    ).join(
+        other=appr,
+        how="left",
+        on=['PropertyID', 'Year'],
+    )
+    .with_columns([
+        #value conditional
+        pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
+            .then(pl.col("AssdTotalValue"))
+            .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
+            .then(pl.col("MarketTotalValue"))
+            .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
+            .then(pl.col("ApprTotalValue"))
+            .otherwise(None)
+            .alias("Value").cast(pl.Int64),
+        #flag for which value is used
+        pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
+            .then(pl.lit('Assd'))
+            .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
+            .then(pl.lit('Market'))
+            .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
+            .then(pl.lit('Appr'))
+            .otherwise(None)
+            .alias("AssessmentUsed")
+    ]
+    ).with_columns([
+        (pl.col("Year").rank(method="random", descending = True, seed = 1)
+            .over(['Year', "PropertyID"])
+            .alias("RecentValueByYear")),
+        # limit to only the most recent value of each property
+        ]).filter(
+            pl.col("RecentValueByYear") == 1
         )
-        ).collect(streaming=True)
+    .select(
+        ['PropertyID','Year', 'Value', 'AssessmentUsed', 'MarketTotalValue', 'ApprTotalValue']
+    )
+    ).collect(streaming=True)
 
-        #write to parquet
-        valhist_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
-        valhist_ranked.clear()
-        logging.info(f"{output_filepath_ranked} complete.")
-
-    except Exception as e:
-        if os.path.exists(output_filepath_ranked):
-            os.remove(output_filepath_ranked)
-        logging.info(f"Error: {str(e)}")
+    #write to parquet
+    valhist_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
+    valhist_ranked.clear()
+    logging.info(f"{output_filepath_ranked} complete.")
 
     #delete unzipped file for memory conservation
     logging.info("Deleting unzipped txt file...")
@@ -491,7 +484,7 @@ def main(input_dir: str, log_file: str):
     # make sure there is a "raw" dir with files
     if not os.path.exists(raw_dir):
         logging.info(f'No raw subdir in the input dir. Stopping ETL.')
-        return
+        sys.exit()
 
     # get all files within the directory and sort into a dictionary
     logging.info("Collecting all files in input directory...")
@@ -505,7 +498,7 @@ def main(input_dir: str, log_file: str):
     for type, list in sorted_filenames.items():
         if len(list) < 1:
             logging.info(f'Raw subdir does not have a {type} file. Stopping ETL.')
-            return
+            sys.exit()
 
     # convert each file to parquet
     logging.info("Looping through all files...")
@@ -534,6 +527,12 @@ def main(input_dir: str, log_file: str):
     for file_type in ["Prop", "ranked_Deed", "TaxHist", "ranked_ValHist"]:
         sorted_filenames[file_type] = [filename for filename in filenames if file_type in filename]
     logging.info(f'Relevant files in staging: {sorted_filenames}')
+
+    # check to make sure there is one of each of 4 files to continue
+    for type, list in sorted_filenames.items():
+        if len(list) < 1:
+            logging.info(f'Raw subdir does not have a {type} file. Stopping ETL.')
+            sys.exit()
 
     #@TODO: generalize this to multiple files
     #assuming only one file per list
