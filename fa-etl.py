@@ -307,41 +307,46 @@ def convert_valhist(filename, input_dir):
         market_filepath = output_dir+"/market.parquet"
         appr_filepath = output_dir+"/appr.parquet"
 
+        if not os.path.exists(assd_filepath) & os.path.exists(market_filepath) & os.path.exists(appr_filepath):
 
-        logging.info(f"Creating assd parquet...")
-        #split val hist into three separate datasets with PropertyID, Year as consistent
-        (pl.scan_parquet(Path(output_filepath), low_memory = True, use_statistics=True, hive_partitioning=True)
-            .with_columns([pl.col('AssdYear').cast(pl.Int64).alias('Year')])
-            .filter(
-                ((pl.col('AssdTotalValue').is_not_null()) & (pl.col('AssdYear').is_not_null())))
-            .select(['PropertyID', 'AssdTotalValue', 'Year'])
-            ).sink_parquet(assd_filepath)
+            logging.info(f"Creating assd parquet...")
+            #split val hist into three separate datasets with PropertyID, Year as consistent
+            ##TODO: this seems super repetitive, but it might be the best option given the size of the dataset.
 
-        logging.info(f"Creating market parquet...")
-        (pl.scan_parquet(Path(output_filepath), low_memory = True, use_statistics=True, hive_partitioning=True)
-            .with_columns([pl.col('MarketValueYear').cast(pl.Int64).alias('Year')])
-            .filter(
-                ((pl.col('MarketTotalValue').is_not_null()) & (pl.col('MarketValueYear').is_not_null())))
-            .select(['PropertyID', 'MarketTotalValue', 'Year'])
-            ).sink_parquet(Path(market_filepath), compression="snappy")
+            (pl.scan_parquet(Path(output_filepath), low_memory = True, use_statistics=True, hive_partitioning=True)
+                .with_columns([pl.col('AssdYear').cast(pl.Int64).alias('Year')])
+                .filter(
+                    ((pl.col('AssdTotalValue').is_not_null()) & (pl.col('AssdYear').is_not_null())))
+                .select(['PropertyID', 'AssdTotalValue', 'Year'])
+                ).sink_parquet(assd_filepath)
 
-        logging.info(f"Creating appr parquet...")
-        (pl.scan_parquet(Path(output_filepath), low_memory = True, use_statistics=True, hive_partitioning=True)
-            .with_columns([pl.col('ApprYear').cast(pl.Int64).alias('Year')])
-            .filter(
-                ((pl.col('ApprTotalValue').is_not_null() & (pl.col('ApprYear').is_not_null()))))
-            .select(['PropertyID', 'ApprTotalValue', 'Year'])
-            ).sink_parquet(Path(appr_filepath), compression="snappy")
+            logging.info(f"Creating market parquet...")
+            (pl.scan_parquet(Path(output_filepath), low_memory = True, use_statistics=True, hive_partitioning=True)
+                .with_columns([pl.col('MarketValueYear').cast(pl.Int64).alias('Year')])
+                .filter(
+                    ((pl.col('MarketTotalValue').is_not_null()) & (pl.col('MarketValueYear').is_not_null())))
+                .select(['PropertyID', 'MarketTotalValue', 'Year'])
+                ).sink_parquet(Path(market_filepath), compression="snappy")
 
-        #checks - make sure there are no duplicates in the above (by propID/year)
+            logging.info(f"Creating appr parquet...")
+            (pl.scan_parquet(Path(output_filepath), low_memory = True, use_statistics=True, hive_partitioning=True)
+                .with_columns([pl.col('ApprYear').cast(pl.Int64).alias('Year')])
+                .filter(
+                    ((pl.col('ApprTotalValue').is_not_null() & (pl.col('ApprYear').is_not_null()))))
+                .select(['PropertyID', 'ApprTotalValue', 'Year'])
+                ).sink_parquet(Path(appr_filepath), compression="snappy")
+
+        #write checks - make sure there are no duplicates in the above (by propID/year)
+            # if so, raise error and don't proceed
+
         logging.info(f"Joining assessed values and market values on propid/year...")
         # join with market data
-        (pl.scan_parquet(Path(assd_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+        (pl.scan_parquet(Path(assd_filepath), low_memory = True, parallel='auto')
             .join(
-            other=pl.scan_parquet(Path(market_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False),
+            other=pl.scan_parquet(Path(market_filepath), low_memory = True, parallel='auto'),
             how="left",
             on=['PropertyID', 'Year'],
-            force_parallel=True
+            #force_parallel=True
         )).sink_parquet(Path(output_filepath_ranked), compression="snappy")
 
         logging.info(f"val/market join on propid/year complete. Starting second join...")
@@ -350,7 +355,7 @@ def convert_valhist(filename, input_dir):
         # (pl.scan_parquet(Path(output_filepath_ranked), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
         #     # # join with appr data
         #     ).join(
-        #         other=appr,
+        #         other=pl.scan_parquet(Path(appr_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False),
         #         how="left",
         #         on=['PropertyID', 'Year'],
         #     ).sink_parquet(
