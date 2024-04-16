@@ -23,9 +23,9 @@ module load python/anaconda-2022.05
 
 source activate fa_etl_env
 
-working_directory=/project/crberry/firstamerican-etl/dev/36061
-
 log_file_arg=/project/crberry/firstamerican-etl/deployments/deploy_etl.log
-input_dir_arg=$working_directory/
+input_dir_arg=/project/crberry/firstamerican-etl/deployments/national
+annual_file_string_arg=Annual
+value_history_file_string_arg=ValueHistory
 
-python fa-etl.py --input_dir $input_dir_arg --log_file $log_file_arg
+python fa-etl.py --input_dir $input_dir_arg --log_file $log_file_arg --annual_file_string $annual_file_string_arg --value_history_file_string $value_history_file_string_arg

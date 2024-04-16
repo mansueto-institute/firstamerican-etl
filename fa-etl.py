@@ -35,15 +35,11 @@ def convert_sales(filename, input_dir):
     output_filepath = output_dir + "/" + filename.replace(".txt.zip", ".parquet")
     output_filepath_ranked = output_dir + "/ranked_" + filename.replace(".txt.zip", ".parquet")
 
-    # # skip conversion if the file already exists
-    # if os.path.exists(output_filepath):
-    #     logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
-    #     sys.exit()
-        
-    # if os.path.exists(output_filepath_ranked):
-    #     logging.info(f"{output_filepath_ranked} already exists. Skipping this file in the directory...")
-    #     sys.exit()
-    
+    # skip conversion if the file already exists
+    if os.path.exists(output_filepath) & os.path.exists(output_filepath_ranked):
+        logging.info(f"{output_filepath} and {output_filepath_ranked} already exists. Skipping this file in the directory...")
+        return
+
     # decompress file
     logging.info("Unzipping file...")
     with zipfile.ZipFile(input_filepath, 'r') as zip_ref:
@@ -135,10 +131,10 @@ def convert_prop(filename, input_dir):
     output_dir = input_dir + "/" + "staging"
     output_filepath = output_dir + "/" + filename.replace(".txt.zip", ".parquet")
 
-    # # check if parquet already exists, if it does, skip
-    # if os.path.exists(output_filepath):
-    #     logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
-    #     sys.exit()
+    # check if parquet already exists, if it does, skip
+    if os.path.exists(output_filepath):
+        logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
+        return
     
     try:
         # decompress file
@@ -200,10 +196,10 @@ def convert_taxhist(filename, input_dir):
     output_dir = input_dir + "/" + "staging"
     output_filepath = output_dir + "/" + filename.replace(".txt.zip", ".parquet")
 
-    # # check if parquet already exists, if it does, skip
-    # if os.path.exists(output_filepath):
-    #     logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
-    #     sys.exit()
+    # check if parquet already exists, if it does, skip
+    if os.path.exists(output_filepath):
+        logging.info(f"{output_filepath} already exists. Skipping this file in the directory...")
+        return
 
     try:
         # decompress file
@@ -264,10 +260,10 @@ def convert_valhist(filename, input_dir):
     output_filepath = output_dir + "/" + filename.replace(".txt.zip", ".parquet")
     output_filepath_ranked = output_dir + "/ranked_" + filename.replace(".txt.zip", ".parquet")
 
-    # # check if parquet already exists, if it does, skip
-    # if os.path.exists(output_filepath) & os.path.exists(output_filepath_ranked):
-    #     logging.info(f"{output_filepath} and {output_filepath_ranked} already exists. Skipping this file in the directory...")
-    #     sys.exit()
+    # check if parquet already exists, if it does, skip
+    if os.path.exists(output_filepath) & os.path.exists(output_filepath_ranked):
+        logging.info(f"{output_filepath} and {output_filepath_ranked} already exists. Skipping this file in the directory...")
+        return
 
     # decompress file
     logging.info("Unzipping file...")
@@ -320,7 +316,11 @@ def convert_valhist(filename, input_dir):
             ((pl.col('ApprTotalValue').is_not_null() & (pl.col('ApprYear').is_not_null()))))
         .select(['PropertyID', 'ApprTotalValue', 'Year']))
 
-    valhist_ranked = (assd.join(
+    #checks - make sure there are no duplicates in the above (by propID/year)
+
+
+    # valhist_ranked = 
+    (assd.join(
         other=market,
         how="left",
         on=['PropertyID', 'Year'],
@@ -349,22 +349,27 @@ def convert_valhist(filename, input_dir):
             .otherwise(None)
             .alias("AssessmentUsed")
     ]
-    ).with_columns([
-        (pl.col("Year").rank(method="random", descending = True, seed = 1)
-            .over(['Year', "PropertyID"])
-            .alias("RecentValueByYear")),
-        # limit to only the most recent value of each property
-        ]).filter(
-            pl.col("RecentValueByYear") == 1
-        )
-    .select(
-        ['PropertyID','Year', 'Value', 'AssessmentUsed', 'MarketTotalValue', 'ApprTotalValue']
+    # ).with_columns([
+    #     (pl.col("Year").rank(method="random", descending = True, seed = 1)
+    #         .over(['Year', "PropertyID"])
+    #         .alias("RecentValueByYear")),
+    #     # limit to only the most recent value of each property
+    #     ]
+    # ).filter(
+    #     pl.col("RecentValueByYear") == 1
+    # )
+    ).filter(
+        (pl.col('AssessmentUsed') == "Assd")
+    ).select(
+        ['PropertyID','Year', 'Value', 'MarketTotalValue', 'ApprTotalValue']
     )
-    ).collect(streaming=True)
+    #).collect(streaming=True)
+    ).sink_parquet(Path(output_filepath_ranked), compression="snappy")
+
 
     #write to parquet
-    valhist_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
-    valhist_ranked.clear()
+    # valhist_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
+    # valhist_ranked.clear()
     logging.info(f"{output_filepath_ranked} complete.")
 
     #delete unzipped file for memory conservation
@@ -407,11 +412,9 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
         # first join in the data from the annual file (prop characteristics)
         other= prop,
         how = "left",
-        left_on=['PropertyID'], 
-        right_on =['PropertyID'],
+        on='PropertyID',
         #validate='m:1', #checks if only 1 propertyid in annual file
         force_parallel=True 
-        
         # filter out for only the residential properties
         ).filter(
             pl.col("PropertyClassID") == 'R'
@@ -431,18 +434,18 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
             how='left',
             left_on=['PropertyID', 'Year'], 
             right_on=['PropertyID','TaxYear']
-
         #assumption that tax amount is off by 100
         ).with_columns([
             (pl.col("TaxAmt")/100).alias("TaxAmtAdjusted"),
         #filter for only observations with assessment and sales values
         ]).filter(
-            ((pl.col('AssessmentUsed') == "Assd")
-            & (pl.col('SaleAmt').is_not_null()))
+            (pl.col('SaleAmt').is_not_null())
+        ).drop(
+            ['PropertyClassID','FATimeStamp','SitusGeoStatusCode','FIPS_SitusCensusTract','AssessmentUsed']
         )).sink_parquet(output_filepath, compression="snappy")
     logging.info(f"Merged parquet file completed")
 
-def main(input_dir: str, log_file: str):
+def main(input_dir: str, log_file: str, annual_file_string: str, value_history_file_string: str):
     '''
     Walks step by step through the process of the ETL pipeline by: 
     - setting up the environment
@@ -456,6 +459,10 @@ def main(input_dir: str, log_file: str):
         subdirectory with Deed, Prop, TaxHist, and ValHist .txt.zip files.
     - log_file (str): Path to a log file where all "logging.info()" 
         strings will be saved.
+    - annual file string (str): either "Prop" or "Annual" depending 
+        on how the prop/annual filename is saved.
+    - value history file string (str): either "ValHist" or "ValueHistory" depending 
+        on how the value history filename is saved.
 
     Returns: Nothing. Saves new files to the following directories:
     - staging: contains intermediate parquet files for all input .txt.zip files
@@ -479,7 +486,7 @@ def main(input_dir: str, log_file: str):
     # set up logging
     logging.basicConfig(filename=Path(log_file), format='%(asctime)s:%(message)s: ', level=logging.INFO, datefmt='%Y-%m-%d %H:%M:%S')
     logging.captureWarnings(True)
-    logging.info(f'Starting script. Memory usage {mem_profile()}')
+    logging.info(f'Starting first american ETL for {input_dir}. Memory usage {mem_profile()}')
 
     # make sure there is a "raw" dir with files
     if not os.path.exists(raw_dir):
@@ -490,7 +497,7 @@ def main(input_dir: str, log_file: str):
     logging.info("Collecting all files in input directory...")
     filenames = [file for file in os.listdir(raw_dir) if os.path.isfile(os.path.join(raw_dir, file))]
     sorted_filenames = {}
-    for file_type in ["Prop", "Deed", "TaxHist", "ValHist"]:
+    for file_type in [annual_file_string, "Deed", "TaxHist", value_history_file_string]:
         sorted_filenames[file_type] = [filename for filename in filenames if file_type in filename]
     logging.info(f'Files to process: {sorted_filenames}')
 
@@ -507,7 +514,7 @@ def main(input_dir: str, log_file: str):
             for filename in list:
                 logging.info(f'Processing {filename}. Memory usage {mem_profile()}')
                 convert_sales(filename, input_dir)
-        if type == "Prop":
+        if type == annual_file_string:
             for filename in list:
                 logging.info(f'Processing {filename}. Memory usage {mem_profile()}')
                 convert_prop(filename, input_dir)
@@ -515,7 +522,7 @@ def main(input_dir: str, log_file: str):
             for filename in list:
                 logging.info(f'Processing {filename}. Memory usage {mem_profile()}')
                 convert_taxhist(filename, input_dir)
-        if type == "ValHist":
+        if type == value_history_file_string:
             for filename in list:
                 logging.info(f'Processing {filename}. Memory usage {mem_profile()}')
                 convert_valhist(filename, input_dir)
@@ -558,8 +565,10 @@ def setup(args=None):
     Parses command line arguments for script.
     '''
     parser = argparse.ArgumentParser(description='Conducts ETL pipeline to create one combined parquet file.')
-    parser.add_argument('--input_dir', required=True, type=str, dest="input_dir", help="Path to input directory, containing a raw/ subdirectory with Deed, Prop, TaxHist, and ValHist .txt.zip files.")
+    parser.add_argument('--input_dir', required=True, type=str, dest="input_dir", help="Path to input directory, containing a raw/ subdirectory with Deed, Prop/Annual, TaxHist, and ValHist .txt.zip files.")
     parser.add_argument('--log_file', required=True, type=str, dest="log_file", help="Path to log file.")
+    parser.add_argument('--annual_file_string', required=True, type=str, dest="annual_file_string", help="Substring used to determine which file in the dir is the annual file (either Prop or Annual)")
+    parser.add_argument('--value_history_file_string', required=True, type=str, dest="value_history_file_string", help="Substring used to determine which file in the dir is the value history file (either ValHist or ValueHistory)")
     return parser.parse_args(args)
 
 if __name__ == "__main__":
