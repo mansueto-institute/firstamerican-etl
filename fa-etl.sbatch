@@ -29,3 +29,5 @@ annual_file_string_arg=Annual
 value_history_file_string_arg=ValueHistory
 
 python fa-etl.py --input_dir $input_dir_arg --log_file $log_file_arg --annual_file_string $annual_file_string_arg --value_history_file_string $value_history_file_string_arg
+
+
