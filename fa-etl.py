@@ -2,7 +2,6 @@ import argparse, os, zipfile, sys, logging
 from pathlib import Path
 import psutil
 import polars as pl
-# import pyarrow
 
 def mem_profile() -> str:
     """
@@ -49,7 +48,6 @@ def convert_sales(filename, input_dir):
             zip_ref.extractall(unzipped_dir)
 
     #convert all sales txt file to parquet
-    # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L158-L213
     try:
         logging.info(f"Converting {input_filepath} to parquet...")
         (pl.scan_csv(Path(unzipped_filepath), separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
@@ -60,6 +58,7 @@ def convert_sales(filename, input_dir):
                 .with_columns(pl.col('RecordingDate').cast(pl.Utf8).str.slice(offset=0,length = 4).alias("RecordingYearSlice"))
                 .with_columns([
                     (pl.col('PropertyID').cast(pl.Int64)),
+                    # (pl.col('PropertyID').alias("PropertyID_str")),
                     (pl.col('FIPS').cast(pl.Utf8).str.pad_start(5, "0")),
                     (pl.col('RecordingDate').cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
                     (pl.col('SaleDate').cast(pl.Utf8).str.to_date("%Y%m%d", strict = False, exact = False)),
@@ -72,6 +71,8 @@ def convert_sales(filename, input_dir):
                     (pl.col('SaleDate').dt.year().alias("SaleYear")),
                     (pl.col('FATimeStamp').dt.year().alias("FATimeStampYear")),
                     (pl.when((pl.col("FATransactionID_1").is_in(['1', '6'])) & (pl.col('TransactionType').is_in(['2', '3']))).then(1).otherwise(0).alias("SaleFlag")),
+                    # check to make sure that the propID structure has been retained when converting to an int (1 if had a leading 0 or decimal, 0 otherwise)
+                    # (pl.when((pl.col("PropertyID_str").str.starts_with('0') | (pl.col("PropertyID_str") != pl.col('PropertyID').cast(pl.String)))).then(1).otherwise(0).alias("PropIDFlag"))
                 ])                     
             ).sink_parquet(Path(output_filepath), compression="snappy")
         logging.info(f"{output_filepath} complete.")
@@ -308,6 +309,7 @@ def convert_valhist(filename, input_dir):
         assd_filepath = output_dir+"/assd.parquet"
         market_filepath = output_dir+"/market.parquet"
         appr_filepath = output_dir+"/appr.parquet"
+        logging.info(f"filepaths: {assd_filepath}, {market_filepath} and {appr_filepath}...")
 
         if not os.path.exists(assd_filepath) & os.path.exists(market_filepath) & os.path.exists(appr_filepath):
 
@@ -340,62 +342,77 @@ def convert_valhist(filename, input_dir):
 
         #write checks - make sure there are no duplicates in the above (by propID/year)
             # if so, raise error and don't proceed
+        assd = pl.scan_parquet(Path(assd_filepath), low_memory = True, parallel='auto')
+        appr = pl.scan_parquet(Path(appr_filepath), low_memory = True, parallel='auto')
+        market = pl.scan_parquet(Path(market_filepath), low_memory = True, parallel='auto')
 
         logging.info(f"Joining assessed values and market values on propid/year...")
         # join with market data
-        (pl.scan_parquet(Path(assd_filepath), low_memory = True, parallel='auto')
-            .join(
-            other=pl.scan_parquet(Path(market_filepath), low_memory = True, parallel='auto'),
+        assd.join(
+            other=market,
             how="left",
             on=['PropertyID', 'Year'],
-            #force_parallel=True
-        )).sink_parquet(Path(output_filepath_ranked), compression="snappy")
+        ).sink_parquet(Path(output_filepath_ranked), compression="snappy")
+
 
         logging.info(f"val/market join on propid/year complete. Starting second join...")
 
+        # check if the length of the output of a ldf is 0 (aka dataframe is empty)
+        logging.info(f"Check if appraisal dataframe is empty...")
+        if (appr.describe().filter(pl.col("statistic") == "count")["PropertyID"])[0] != 0:
+            logging.info(f"Appraisal dataframe is not empty! Joining with val/market...")
 
-        # (pl.scan_parquet(Path(output_filepath_ranked), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
-        #     # # join with appr data
-        #     ).join(
-        #         other=pl.scan_parquet(Path(appr_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False),
-        #         how="left",
-        #         on=['PropertyID', 'Year'],
-        #     ).sink_parquet(
-        #     Path(output_filepath_ranked), 
-        #     compression="snappy"
-        # )
+            (pl.scan_parquet(Path(output_filepath_ranked), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+                # # join with appr data
+                ).join(
+                    other=appr,
+                    how="left",
+                    on=['PropertyID', 'Year'],
+                ).sink_parquet(
+                Path(output_filepath_ranked), 
+                compression="snappy"
+            )
+        else:
+            logging.info(f"Appraisal dataframe is empty! Adding a col of nulls for appraisal col...")
+            (pl.scan_parquet(Path(output_filepath_ranked), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+                # # join with appr data
+                ).with_columns([
+                    # add col of nulls for ApprTotalValue because not present for any PropIDs
+                    pl.when(True).then(None).alias("ApprTotalValue")
+                ]).sink_parquet(
+                Path(output_filepath_ranked), 
+                compression="snappy"
+            )
 
-        # logging.info(f"val/market/appr join on propid/year complete. Doing with_cols operations...")
+        logging.info(f"val/market/appr join on propid/year complete. Doing with_cols operations...")
+        (pl.scan_parquet(Path(output_filepath_ranked), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+            .with_columns([
+                #value conditional
+                pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
+                    .then(pl.col("AssdTotalValue"))
+                    .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
+                    .then(pl.col("MarketTotalValue"))
+                    .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
+                    .then(pl.col("ApprTotalValue"))
+                    .otherwise(None)
+                    .alias("Value").cast(pl.Int64),
+                #flag for which value is used
+                pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
+                    .then(pl.lit('Assd'))
+                    .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
+                    .then(pl.lit('Market'))
+                    .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
+                    .then(pl.lit('Appr'))
+                    .otherwise(None)
+                    .alias("AssessmentUsed")
+            ]
+        ).filter(
+            (pl.col('AssessmentUsed') == "Assd")
+        ).select(
+            ['PropertyID','Year', 'Value', 'MarketTotalValue', 'ApprTotalValue']
+        )).sink_parquet(Path(output_filepath_ranked), compression="snappy")
 
-        # (pl.scan_parquet(Path(output_filepath_ranked), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
-        #     .with_columns([
-        #         #value conditional
-        #         pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
-        #             .then(pl.col("AssdTotalValue"))
-        #             .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
-        #             .then(pl.col("MarketTotalValue"))
-        #             .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
-        #             .then(pl.col("ApprTotalValue"))
-        #             .otherwise(None)
-        #             .alias("Value").cast(pl.Int64),
-        #         #flag for which value is used
-        #         pl.when((pl.col("AssdTotalValue").is_not_null()) & (pl.col("AssdTotalValue") != 0))
-        #             .then(pl.lit('Assd'))
-        #             .when((pl.col("MarketTotalValue").is_not_null()) & (pl.col("MarketTotalValue") != 0))
-        #             .then(pl.lit('Market'))
-        #             .when((pl.col("ApprTotalValue").is_not_null()) & (pl.col("ApprTotalValue") != 0))
-        #             .then(pl.lit('Appr'))
-        #             .otherwise(None)
-        #             .alias("AssessmentUsed")
-        #     ]
-        # ).filter(
-        #     (pl.col('AssessmentUsed') == "Assd")
-        # ).select(
-        #     ['PropertyID','Year', 'Value', 'MarketTotalValue', 'ApprTotalValue']
-        # )).sink_parquet(Path(output_filepath_ranked), compression="snappy")
-
-        # logging.info(f"{output_filepath_ranked} complete.")
-
+        logging.info(f"{output_filepath_ranked} complete.")
 
     #delete unzipped file for memory conservation
     logging.info("Deleting unzipped txt file...")
