@@ -2,7 +2,7 @@ import argparse, os, zipfile, sys, logging
 from pathlib import Path
 import psutil
 import polars as pl
-import pyarrow
+# import pyarrow
 
 def mem_profile() -> str:
     """
@@ -421,10 +421,10 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
     '''
     #read in parquet as lazy Dataframes
     logging.info(f"Reading in parquet files to merge...")
-    ranked_valhist = pl.scan_parquet(Path(input_dir+"/staging/"+ranked_valhist_filename))
-    prop = pl.scan_parquet(Path(input_dir+"/staging/"+prop_filename))
-    ranked_deed = pl.scan_parquet(Path(input_dir+"/staging/"+ranked_deed_filename))
-    taxhist = pl.scan_parquet(Path(input_dir+"/staging/"+taxhist_filename))
+    ranked_valhist = pl.scan_parquet(Path(input_dir+"/staging/"+ranked_valhist_filename), low_memory=True)
+    prop = pl.scan_parquet(Path(input_dir+"/staging/"+prop_filename), low_memory=True)
+    ranked_deed = pl.scan_parquet(Path(input_dir+"/staging/"+ranked_deed_filename), low_memory=True)
+    taxhist = pl.scan_parquet(Path(input_dir+"/staging/"+taxhist_filename), low_memory=True)
 
     #set output path
     output_filepath = Path(input_dir+"/unified/merged.parquet")
