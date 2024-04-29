@@ -222,8 +222,10 @@ def convert_taxhist(filename, input_dir):
                 (pl.col('PropertyID').cast(pl.Int64)),
                 (pl.col('TaxYear').cast(pl.Int64)),
                 (pl.col('TaxAmt').cast(pl.Int64)),
+                #assumption that tax amount is off by 100
+                (pl.col("TaxAmt").cast(pl.Int64)/100).alias("TaxAmtAdjusted"),
             ])
-            ).sink_parquet(Path(output_filepath), compression="snappy")
+        ).sink_parquet(Path(output_filepath), compression="snappy")
         logging.info(f"{output_filepath} complete.")
     
     except Exception as e:
@@ -447,20 +449,13 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
             how='left',
             left_on=['PropertyID', 'Year'], 
             right_on=['PropertyID','RecordingYear']
-        #assumption that sale amount is off by 10x in 2012 (values are super weird)
-        # ).with_columns([
-        #     (pl.col("SaleAmt")/10).alias("SaleAmtAdjusted"),
-        # ]
         ).join(
             other=taxhist,
             how='left',
             left_on=['PropertyID', 'Year'], 
             right_on=['PropertyID','TaxYear']
-        #assumption that tax amount is off by 100
-        ).with_columns([
-            (pl.col("TaxAmt")/100).alias("TaxAmtAdjusted"),
         #filter for only observations with assessment and sales values
-        ]).filter(
+        ).filter(
             (pl.col('SaleAmt').is_not_null())
         ).drop(
             ['PropertyClassID','FATimeStamp','SitusGeoStatusCode','FIPS_SitusCensusTract','AssessmentUsed']
