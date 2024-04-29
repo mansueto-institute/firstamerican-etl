@@ -440,9 +440,6 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
         on='PropertyID',
         #validate='m:1', #checks if only 1 propertyid in annual file
         force_parallel=True 
-        # filter out for only the residential properties
-        ).filter(
-            pl.col("PropertyClassID") == 'R'
         # second join in the data from the most recent sale of each year
         ).join(
             other=ranked_deed,
