@@ -13,15 +13,21 @@
 #SBATCH --account=pi-crberry
 
 module load python/anaconda-2022.05
-conda activate fa_etl_env
 
-working_directory=/Users/claireboyd/internships/mansueto/firstamerican-etl/dev/36061
+# CREATE CONDA ENVIRONMENT IF NOT ALREADY CREATED
+# conda create --name fa_etl_env python=3.11.5 --yes
+# source activate fa_etl_env
+# conda install -c conda-forge polars --yes
+# conda install -c conda-forge pyarrow --yes
+# conda install psutil
 
-log_file_arg=$working_directory/deployments/deploy_etl.log
-input_dir_arg=$working_directory/
+source activate fa_etl_env
 
-python fa-etl.py --input_dir $input_dir_arg --log_file $log_file_arg
+log_file_arg=/project/crberry/firstamerican-etl/deployments/deploy_etl.log
+input_dir_arg=/project/crberry/firstamerican-etl/deployments/national
+annual_file_string_arg=Annual
+value_history_file_string_arg=ValueHistory
 
-
+python fa-etl.py --input_dir $input_dir_arg --log_file $log_file_arg --annual_file_string $annual_file_string_arg --value_history_file_string $value_history_file_string_arg
 
 
