@@ -10,12 +10,15 @@ def mem_profile() -> str:
     mem_use = str(round(100 - psutil.virtual_memory().percent,4))+'% of '+str(round(psutil.virtual_memory().total/1e+9,3))+' GB RAM'
     return mem_use
 
-def is_lazydataframe_empty(ldf):
+def is_lazydataframe_empty(filepath):
     """
     Checks if a polars lazy dataframe is empty given a lazy dataframe.
     Returns: boolean (True, False)
     """
-    return ((ldf.describe().filter(pl.col("statistic") == "count")["PropertyID"])[0] == 0)
+    if pl.scan_parquet(filepath) is None:
+        return True
+    else:
+        return False
 
 def convert_sales(filename, input_dir):
     '''
@@ -55,8 +58,8 @@ def convert_sales(filename, input_dir):
             with zipfile.ZipFile(input_filepath, 'r') as zip_ref:
                 zip_ref.extractall(unzipped_dir)
 
-    # #convert all sales txt file to parquet
-    # try:
+    #convert all sales txt file to parquet
+    try:
         logging.info(f"Converting {input_filepath} to parquet...")
         (pl.scan_csv(Path(unzipped_filepath), separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
             .select(['PropertyID', 'SaleAmt', 'RecordingDate', 'FIPS', 'FATimeStamp', 'FATransactionID', 'TransactionType', 'SaleDate'])
@@ -84,52 +87,50 @@ def convert_sales(filename, input_dir):
                 ])                     
             ).collect(streaming=True,
             ).write_parquet(Path(output_filepath), compression="snappy", use_pyarrow=True)
+        
         logging.info(f"{output_filepath} complete.")
 
         #delete unzipped file for memory conservation
         logging.info("Deleting unzipped txt file...")
         os.remove(unzipped_filepath)
     
-    # except Exception as e:
-    #     if os.path.exists(output_filepath):
-    #         os.remove(output_filepath)
-    #     logging.info(f"Error: {str(e)}")
-    #     sys.exit()
+    except Exception as e:
+        if os.path.exists(output_filepath):
+            os.remove(output_filepath)
+        logging.error(f"Error: {str(e)}")
+        sys.exit()
 
     # ranked sales file (only gets the most recent sale from each year/ID combination)
-    #try:
-    
-    if not os.path.exists(output_filepath_ranked):
+    try:
+        if not os.path.exists(output_filepath_ranked):
+            logging.info(f"Creating {output_filepath_ranked}...")
+            sale_ranked = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
+                .filter(pl.col('SaleFlag') == 1)
+                .with_columns([
+                    (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(['RecordingYear', "PropertyID"]).alias("RecentSaleByYear")),
+                    (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(["PropertyID"]).alias("MostRecentSale")),
+                    (pl.col('PropertyID').cast(pl.Int64)),
+                    (pl.col('RecordingYear').cast(pl.Int64)),
+                    (pl.col('SaleAmt').cast(pl.Int64)),
+                ])
+                .filter(pl.col('RecentSaleByYear') == 1)
+                ).select(['PropertyID', 'SaleAmt', 'RecordingYear']
+                ).collect(streaming=True)
 
-        logging.info(f"Creating {output_filepath_ranked}...")
-        sale_ranked = (pl.scan_parquet(Path(output_filepath), low_memory = True, parallel='row_groups', use_statistics=False, hive_partitioning=False)
-            .filter(pl.col('SaleFlag') == 1)
-            .with_columns([
-                (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(['RecordingYear', "PropertyID"]).alias("RecentSaleByYear")),
-                (pl.col("RecordingDate").rank(method="random", descending = True, seed = 1).over(["PropertyID"]).alias("MostRecentSale")),
-                (pl.col('PropertyID').cast(pl.Int64)),
-                (pl.col('RecordingYear').cast(pl.Int64)),
-                (pl.col('SaleAmt').cast(pl.Int64)),
-            ])
-            .filter(pl.col('RecentSaleByYear') == 1)
-            ).select(['PropertyID', 'SaleAmt', 'RecordingYear']
-            ).collect(streaming=True)
+            sale_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
+            sale_ranked.clear()
+            logging.info(f"{output_filepath_ranked} complete.")
 
-        sale_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
-        sale_ranked.clear()
-        logging.info(f"{output_filepath_ranked} complete.")
+    except Exception as e:
+        if os.path.exists(output_filepath_ranked):
+            os.remove(output_filepath_ranked)
+        logging.error(f"Error: {str(e)}")
+        sys.exit()
 
-    
-    
-    # except Exception as e:
-    #     if os.path.exists(output_filepath_ranked):
-    #         os.remove(output_filepath_ranked)
-    #     logging.info(f"Error: {str(e)}")
-    #     sys.exit()
-
-    logging.info("remove just Deed file")
+    logging.info("remove just deed file")
     os.remove(output_filepath)
     logging.info("Complete. Moving to next file...")
+
 
 def convert_prop(filename, input_dir):
     '''
@@ -167,9 +168,9 @@ def convert_prop(filename, input_dir):
 
         # convert annual file to parquet
         logging.info(f"Converting {input_filepath} to parquet...")
-        # see https://github.com/mansueto-institute/fa-etl/blob/main/fa-etl.py#L127-L155
         (pl.scan_csv(unzipped_filepath, separator = '|', low_memory = True, try_parse_dates=True, infer_schema_length=1000, ignore_errors = True, truncate_ragged_lines = True)
             .select(['PropertyID', 'PropertyClassID', "FATimeStamp", 'SitusLatitude', 'SitusLongitude', 'SitusFullStreetAddress', 'SitusCity', 'SitusState', 'SitusZIP5', 'FIPS', 'SitusCensusTract', 'SitusCensusBlock', 'SitusGeoStatusCode'])
+                # filter for only residential properties early in the pipeline.
                 .filter(pl.col('PropertyClassID') == 'R')
                 .filter(pl.col('PropertyID').is_not_null())
                 .with_columns([
@@ -326,24 +327,23 @@ def convert_valhist(filename, input_dir):
     else:
         logging.info(f"{output_filepath} already exists. Moving on...")
 
-
     if not os.path.exists(output_filepath_ranked):
         logging.info(f"Creating {output_filepath_temp1}...")
 
         #temp filepaths
         assd_filepath = output_dir+"/assd.parquet"
-        # market_filepath = output_dir+"/market.parquet"
-        # appr_filepath = output_dir+"/appr.parquet"
-        # logging.info(f"filepaths: {assd_filepath}, {market_filepath} and {appr_filepath}...")
+        market_filepath = output_dir+"/market.parquet"
+        appr_filepath = output_dir+"/appr.parquet"
+        logging.info(f"filepaths: {assd_filepath}, {market_filepath} and {appr_filepath}...")
 
         if not os.path.exists(assd_filepath):
             logging.info(f"Creating assd parquet...")
             (pl.scan_parquet(Path(output_filepath), low_memory = True, use_statistics=True, hive_partitioning=True)
                 .with_columns([pl.col('AssdYear').cast(pl.Int64).alias('Year')])
-                .with_columns([pl.col('AssdTotalValue').cast(pl.Int64).alias('Value')])
+                #.with_columns([pl.col('AssdTotalValue').cast(pl.Int64).alias('Value')])
                 .filter(
                     ((pl.col('AssdTotalValue').is_not_null()) & (pl.col('AssdYear').is_not_null())))
-                .select(['PropertyID', 'Value', 'Year'])
+                .select(['PropertyID', 'AssdTotalValue', 'Year'])
                 ).collect(streaming=True
                 ).write_parquet(Path(assd_filepath), compression="snappy")
         
@@ -359,23 +359,26 @@ def convert_valhist(filename, input_dir):
         
         if not os.path.exists(appr_filepath):
             logging.info(f"Creating appr parquet...")
-            (pl.scan_parquet(Path(output_filepath), low_memory = True, use_statistics=True, hive_partitioning=True)
+            appr = (pl.scan_parquet(Path(output_filepath), low_memory = True, use_statistics=True, hive_partitioning=True)
                 .with_columns([pl.col('ApprYear').cast(pl.Int64).alias('Year')])
                 .filter(
                     ((pl.col('ApprTotalValue').is_not_null() & (pl.col('ApprYear').is_not_null()))))
                 .select(['PropertyID', 'ApprTotalValue', 'Year'])
-                ).collect(streaming=True
-                ).write_parquet(Path(appr_filepath), compression="snappy")
+                ).collect(streaming=True)
+            
+            # only write the file if there are rows in the df
+            if appr.shape[0] > 0:
+                appr.write_parquet(Path(appr_filepath), compression="snappy")
+                appr.clear()
 
-        # write checks - make sure there are no duplicates in the above (by propID/year)
-        #     if so, raise error and don't proceed
         assd = pl.scan_parquet(Path(assd_filepath), low_memory = True)
-        appr = pl.scan_parquet(Path(appr_filepath), low_memory = True)
         market = pl.scan_parquet(Path(market_filepath), low_memory = True)
+        if os.path.isfile(appr_filepath):
+            appr = pl.scan_parquet(Path(appr_filepath), low_memory = True)
 
         logging.info(f"Joining assessed values and market values on propid/year...")
         # join with market data
-        assd_market = assd.join(
+        assd.join(
             other=market,
             how="left",
             on=['PropertyID', 'Year'],
@@ -385,12 +388,12 @@ def convert_valhist(filename, input_dir):
         logging.info(f"val/market join on propid/year complete. Starting second join...")
 
         rankedtemp1_valhist = pl.scan_parquet(Path(output_filepath_temp1), low_memory = True)
-        logging.info(f"is ranked_valhist empty? {is_lazydataframe_empty(rankedtemp1_valhist)}")
+        logging.info(f"is ranked_valhist empty? {is_lazydataframe_empty(output_filepath_temp1)}")
         
-        # check if the length of the output of a ldf is 0 (aka dataframe is empty)
-        logging.info(f"Check if appraisal dataframe is empty...")
-        if not is_lazydataframe_empty(appr):
-            logging.info(f"Appraisal dataframe is not empty! Joining with val/market...")
+        # check if dataframe is empty
+        logging.info(f"Join to appraisal if exists ...")
+        if os.path.isfile(appr_filepath):
+            logging.info(f"Appraisal exists! Joining with val/market...")
             (rankedtemp1_valhist
                 # # join with appr data
                 ).join(
@@ -433,17 +436,20 @@ def convert_valhist(filename, input_dir):
         ).filter(
             (pl.col('AssessmentUsed') == "Assd")
         ).select(
-            ['PropertyID','Year', 'Value', 'MarketTotalValue', 'ApprTotalValue']
+            ['PropertyID','Year', 'AssdTotalValue', 'MarketTotalValue', 'ApprTotalValue']
         )).sink_parquet(Path(output_filepath_ranked), compression="snappy")
 
         logging.info(f"{output_filepath_ranked} complete.")
 
-        #delete unzipped file for memory conservation
-        logging.info("Deleting unranked file...")
-        os.remove(output_filepath)
+        #delete staging files for memory conservation
+        logging.info("Deleting staging files...")
+        for file in [assd_filepath, market_filepath, appr_filepath,
+                     output_filepath, output_filepath_temp1, output_filepath_temp2]:
+            # if exists, delete
+            if os.path.isfile(file):
+                os.remove(file)
 
     logging.info("Complete. Moving to next file...")
-
 
 def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename, taxhist_filename):
     '''
@@ -478,14 +484,12 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
 
     logging.info(f"Joining ranked val hist to prop, ranked_deed, and taxhist...")
     # https://docs.pola.rs/py-polars/html/reference/lazyframe/api/polars.LazyFrame.join.html
-    step1 = (ranked_valhist.join(
+    join = (ranked_valhist.join(
         # first join in the data from the annual file (prop characteristics)
         other= prop,
         how = "inner",
         on='PropertyID',
-        #validate='m:1', #checks if only 1 propertyid in annual file
-        # force_parallel=True 
-        # second join in the data from the most recent sale of each year
+        #second join in the data from the most recent sale of each year
         ).join(
             other=ranked_deed,
             how='inner',
@@ -493,13 +497,14 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
             right_on=['PropertyID','RecordingYear']
         ).join(
             other=taxhist,
-            how='inner',
+            how='left',
             left_on=['PropertyID', 'Year'], 
             right_on=['PropertyID','TaxYear']
-        )).collect(streaming=True)
+        )
+        ).collect(streaming=True)
 
-    step1.write_parquet(output_filepath, use_pyarrow=True, compression="snappy")
-    step1.clear()
+    join.write_parquet(output_filepath, use_pyarrow=True, compression="snappy")
+    join.clear()
     
     logging.info(f"Merged parquet file completed")
 
