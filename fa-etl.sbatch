@@ -1,10 +1,11 @@
 #!/bin/bash
 
 #SBATCH --job-name=firstamerican_etl_job
-#SBATCH --partition=caslake
+#SBATCH --partition=bigmem
 #SBATCH --nodes=1
-#SBATCH --ntasks=32
-#SBATCH --mem=175000
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=45
+#SBATCH --mem=700000
 #SBATCH --output=/project/crberry/firstamerican-etl/deployments/deploy_etl.out
 #SBATCH --error=/project/crberry/firstamerican-etl/deployments/deploy_etl.err
 #SBATCH --mail-type=ALL
@@ -24,9 +25,16 @@ module load python/anaconda-2022.05
 source activate fa_etl_env
 
 log_file_arg=/project/crberry/firstamerican-etl/deployments/deploy_etl.log
-input_dir_arg=/project/crberry/firstamerican-etl/deployments/national
-annual_file_string_arg=Annual
-value_history_file_string_arg=ValueHistory
+
+# #national dataset params
+# input_dir_arg=/project/crberry/firstamerican-etl/deployments/national
+# annual_file_string_arg=Annual
+# value_history_file_string_arg=ValueHistory
+
+#one county test params
+input_dir_arg=/project/crberry/firstamerican-etl/deployments/36061
+annual_file_string_arg=Prop
+value_history_file_string_arg=ValHist
 
 python fa-etl.py --input_dir $input_dir_arg --log_file $log_file_arg --annual_file_string $annual_file_string_arg --value_history_file_string $value_history_file_string_arg
 
