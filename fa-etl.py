@@ -10,16 +10,6 @@ def mem_profile() -> str:
     mem_use = str(round(100 - psutil.virtual_memory().percent,4))+'% of '+str(round(psutil.virtual_memory().total/1e+9,3))+' GB RAM'
     return mem_use
 
-def is_lazydataframe_empty(filepath):
-    """
-    Checks if a polars lazy dataframe is empty given a lazy dataframe.
-    Returns: boolean (True, False)
-    """
-    if pl.scan_parquet(filepath) is None:
-        return True
-    else:
-        return False
-
 def convert_sales(filename, input_dir):
     '''
     Convert zipped txt sales (deed) file into parquet format.
@@ -86,7 +76,7 @@ def convert_sales(filename, input_dir):
                     # (pl.when((pl.col("PropertyID_str").str.starts_with('0') | (pl.col("PropertyID_str") != pl.col('PropertyID').cast(pl.String)))).then(1).otherwise(0).alias("PropIDFlag"))
                 ])                     
             ).collect(streaming=True,
-            ).write_parquet(Path(output_filepath), compression="snappy", use_pyarrow=True)
+            ).write_parquet(Path(output_filepath), compression="snappy")
         
         logging.info(f"{output_filepath} complete.")
 
@@ -117,7 +107,7 @@ def convert_sales(filename, input_dir):
                 ).select(['PropertyID', 'SaleAmt', 'RecordingYear']
                 ).collect(streaming=True)
 
-            sale_ranked.write_parquet(Path(output_filepath_ranked), use_pyarrow=True, compression="snappy")
+            sale_ranked.write_parquet(Path(output_filepath_ranked), compression="snappy")
             sale_ranked.clear()
             logging.info(f"{output_filepath_ranked} complete.")
 
@@ -185,8 +175,9 @@ def convert_prop(filename, input_dir):
                     (pl.when(pl.col('SitusGeoStatusCode').cast(pl.Utf8).is_in(['5', '7', '9', 'A', 'B', 'X', 'R'])).then(pl.col('SitusGeoStatusCode')).otherwise(None).name.keep()),
                     (pl.concat_str([pl.col("FIPS"), pl.col('SitusCensusTract')], separator= "_").fill_null(pl.col('FIPS')).alias("FIPS_SitusCensusTract"))
                     ])
-            ).collect(streaming=True,
-            ).write_parquet(output_filepath, compression="snappy", use_pyarrow=True)
+            ).collect(
+                streaming=True
+            ).write_parquet(output_filepath, compression="snappy")
         logging.info(f"{output_filepath} complete.")
 
     except Exception as e:
@@ -245,7 +236,8 @@ def convert_taxhist(filename, input_dir):
                 #assumption that tax amount is off by 100
                 (pl.col("TaxAmt").cast(pl.Int64)/100).alias("TaxAmtAdjusted"),
             ])
-        ).sink_parquet(Path(output_filepath), compression="snappy")
+        ).collect(streaming=True
+        ).write_parquet(Path(output_filepath), compression="snappy")
         logging.info(f"{output_filepath} complete.")
     
     except Exception as e:
@@ -318,7 +310,8 @@ def convert_valhist(filename, input_dir):
                 (pl.col('ApprYear').cast(pl.Int64)),
                 (pl.col('TaxableYear').cast(pl.Int64)),
             ])
-            ).sink_parquet(Path(output_filepath), compression="snappy")
+            ).collect(streaming=True
+            ).write_parquet(Path(output_filepath), compression="snappy")
         logging.info(f"{output_filepath} complete.")
 
         #delete unzipped file for memory conservation
@@ -388,7 +381,6 @@ def convert_valhist(filename, input_dir):
         logging.info(f"val/market join on propid/year complete. Starting second join...")
 
         rankedtemp1_valhist = pl.scan_parquet(Path(output_filepath_temp1), low_memory = True)
-        logging.info(f"is ranked_valhist empty? {is_lazydataframe_empty(output_filepath_temp1)}")
         
         # check if dataframe is empty
         logging.info(f"Join to appraisal if exists ...")
@@ -437,7 +429,9 @@ def convert_valhist(filename, input_dir):
             (pl.col('AssessmentUsed') == "Assd")
         ).select(
             ['PropertyID','Year', 'AssdTotalValue', 'MarketTotalValue', 'ApprTotalValue']
-        )).sink_parquet(Path(output_filepath_ranked), compression="snappy")
+        )).collect(
+            streaming=True
+        ).write_parquet(Path(output_filepath_ranked), compression="snappy")
 
         logging.info(f"{output_filepath_ranked} complete.")
 
@@ -503,7 +497,7 @@ def join(input_dir, ranked_valhist_filename, prop_filename, ranked_deed_filename
         )
         ).collect(streaming=True)
 
-    join.write_parquet(output_filepath, use_pyarrow=True, compression="snappy")
+    join.write_parquet(output_filepath, compression="snappy")
     join.clear()
     
     logging.info(f"Merged parquet file completed")
